@@ -2,7 +2,7 @@
 
 Binary classification of network traffic as **Normal** or **Attack** using three supervised learning algorithms evaluated on the NSL-KDD benchmark dataset.
 
-**McMaster University — Data Mining Course Project — March 2026**
+**McMaster University**
 
 ---
 
