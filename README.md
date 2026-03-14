@@ -1,4 +1,4 @@
-# Network Intrusion Detection System — NSL-KDD
+# Network Intrusion Detection System NSL-KDD
 
 Binary classification of network traffic as **Normal** or **Attack** using three supervised learning algorithms evaluated on the NSL-KDD benchmark dataset.
 
