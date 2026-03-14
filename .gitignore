@@ -12,3 +12,4 @@ models/
 *.h5
 *.pt
 *.pth
+anaconda_projects/
