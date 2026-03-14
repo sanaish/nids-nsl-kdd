@@ -138,7 +138,14 @@ matplotlib
 seaborn
 jupyter
 ```
+## Collaborators
 
+Both contributors are students at **McMaster University**, Hamilton, Ontario, Canada.
+
+| Name | Institution |
+|---|---|
+| Sana Ishtiaq | McMaster University |
+| Jenil Salimbhai Virani | McMaster University |
 ---
 
 ## Notes
