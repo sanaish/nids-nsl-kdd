@@ -143,6 +143,5 @@ jupyter
 
 ## Notes
 
-- `data/` and `models/` are excluded from git (see `.gitignore`) — download the dataset separately
 - SVM is trained on a 25,000-instance stratified sample due to O(n²) training complexity
 - All encoders and scalers are fitted on training data only to prevent data leakage
