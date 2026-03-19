@@ -3,18 +3,23 @@ __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 anaconda_projects/
+.virtual_documents/
 
 data/raw/*
 !data/raw/*.csv
 !data/raw/.gitkeep
 
 data/processed/*
+!data/processed/*.csv
 !data/processed/.gitkeep
 
 models/*
 !models/.gitkeep
 
 reports/*
+!reports/*.png
+!reports/*.csv
+!reports/*.docx
 !reports/.gitkeep
 
 *.pkl
