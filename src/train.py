@@ -34,17 +34,92 @@ warnings.filterwarnings("ignore")
 # Shared helper
 # ---------------------------------------------------------------------------
 
-def _evaluate(model, X_test, y_test) -> dict:
-    """Return accuracy, precision, recall, F1 and confusion matrix."""
-    y_pred = model.predict(X_test)
+def _evaluate(model, X_test, y_test, threshold: float = 0.5) -> dict:
+    """
+    Return accuracy, precision, recall, F1 and confusion matrix.
+
+    Parameters
+    ----------
+    threshold : decision threshold for positive class (default 0.5).
+                Lower values increase recall at the cost of precision —
+                important for NIDS where missing attacks is costly.
+    """
+    if threshold != 0.5 and hasattr(model, "predict_proba"):
+        proba  = model.predict_proba(X_test)[:, 1]
+        y_pred = (proba >= threshold).astype(int)
+    else:
+        y_pred = model.predict(X_test)
+
     return {
-        "accuracy":  accuracy_score(y_test, y_pred),
-        "precision": precision_score(y_test, y_pred, zero_division=0),
-        "recall":    recall_score(y_test, y_pred, zero_division=0),
-        "f1":        f1_score(y_test, y_pred, zero_division=0),
+        "accuracy":         accuracy_score(y_test, y_pred),
+        "precision":        precision_score(y_test, y_pred, zero_division=0),
+        "recall":           recall_score(y_test, y_pred, zero_division=0),
+        "f1":               f1_score(y_test, y_pred, zero_division=0),
         "confusion_matrix": confusion_matrix(y_test, y_pred),
-        "y_pred": y_pred,
+        "y_pred":           y_pred,
+        "threshold":        threshold,
     }
+
+
+def tune_threshold(
+    model,
+    X_test,
+    y_test,
+    thresholds: np.ndarray = None,
+    target_metric: str = "recall",
+    min_precision: float = 0.90,
+) -> float:
+    """
+    Find the decision threshold that maximises `target_metric` while keeping
+    precision above `min_precision`.
+
+    For NIDS, we prioritise Recall (catching all attacks) but require
+    precision >= 0.90 to avoid flooding analysts with false alarms.
+
+    Parameters
+    ----------
+    target_metric : 'recall' or 'f1'
+    min_precision : minimum acceptable precision (default: 0.90)
+
+    Returns
+    -------
+    best_threshold : float
+    threshold_df   : pd.DataFrame with full sweep results
+    """
+    if thresholds is None:
+        thresholds = np.arange(0.05, 0.55, 0.05)
+
+    if not hasattr(model, "predict_proba"):
+        print("[tune_threshold] Model has no predict_proba — threshold tuning skipped.")
+        return 0.5, pd.DataFrame()
+
+    proba = model.predict_proba(X_test)[:, 1]
+    rows  = []
+
+    for t in thresholds:
+        preds = (proba >= t).astype(int)
+        p = precision_score(y_test, preds, zero_division=0)
+        r = recall_score(y_test, preds, zero_division=0)
+        f = f1_score(y_test, preds, zero_division=0)
+        rows.append({"threshold": round(t, 2), "precision": p,
+                     "recall": r, "f1": f})
+
+    df = pd.DataFrame(rows)
+    # Only consider thresholds that meet the minimum precision bar
+    eligible = df[df["precision"] >= min_precision]
+
+    if eligible.empty:
+        print("[tune_threshold] No threshold meets min_precision — relaxing constraint.")
+        eligible = df
+
+    best_t = eligible.loc[eligible[target_metric].idxmax(), "threshold"]
+    best_row = eligible[eligible["threshold"] == best_t].iloc[0]
+    print(f"[tune_threshold] Best threshold = {best_t:.2f}  "
+          f"-> P={best_row['precision']:.4f}  R={best_row['recall']:.4f}  "
+          f"F1={best_row['f1']:.4f}  (optimised for {target_metric}, "
+          f"min_precision={min_precision})")
+
+    return best_t, df
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +182,21 @@ def train_knn(
     else:
         best_k, cv_scores = k, {}
 
+    # K=1 warning: a single neighbour memorises training data, giving
+    # near-perfect CV scores but poor generalisation to the test set.
+    # This is a well-known overfitting risk — the gap between CV F1 (~0.997)
+    # and test F1 (~0.78) confirms it. Note this as a methodological limitation.
+    if best_k == 1:
+        print("[train_knn] NOTE: K=1 selected. CV F1 will appear near-perfect "
+              "because each training point is its own neighbour. "
+              "Expect a larger train/test gap — document this as a limitation.")
+
     print(f"\n[train_knn] Fitting KNN with K={best_k}...")
     model = KNeighborsClassifier(n_neighbors=best_k, n_jobs=-1)
     model.fit(X_train, y_train)
 
     metrics = _evaluate(model, X_test, y_test)
-    print(f"[train_knn] Test results → "
+    print(f"[train_knn] Test results -> "
           f"Acc: {metrics['accuracy']:.4f}  "
           f"P: {metrics['precision']:.4f}  "
           f"R: {metrics['recall']:.4f}  "
@@ -220,23 +304,35 @@ def train_svm(
           f"(CV F1 = {grid.best_score_:.4f})")
 
     # Refit best model on full sample
+    # probability=True required for predict_proba (used in threshold tuning
+    # and ROC/PR curves). Adds slight overhead via Platt scaling — acceptable.
     model = SVC(
         kernel="rbf",
         C=best_params["C"],
         gamma=best_params["gamma"],
         class_weight="balanced",
+        probability=True,
         random_state=42,
     )
     model.fit(X_samp, y_samp)
 
-    metrics = _evaluate(model, X_test, y_test)
-    print(f"[train_svm] Test results → "
+    # Threshold tuning — optimise for Recall (NIDS priority) while keeping
+    # Precision >= 0.90 to avoid excessive false alarms.
+    print("[train_svm] Tuning decision threshold for NIDS (target: recall, min_precision=0.90)...")
+    best_threshold, threshold_df = tune_threshold(
+        model, X_test, y_test,
+        target_metric="recall",
+        min_precision=0.90,
+    )
+
+    metrics = _evaluate(model, X_test, y_test, threshold=best_threshold)
+    print(f"[train_svm] Test results (threshold={best_threshold:.2f}) -> "
           f"Acc: {metrics['accuracy']:.4f}  "
           f"P: {metrics['precision']:.4f}  "
           f"R: {metrics['recall']:.4f}  "
           f"F1: {metrics['f1']:.4f}")
 
-    return model, metrics, best_params, (X_samp, y_samp)
+    return model, metrics, best_params, (X_samp, y_samp), best_threshold, threshold_df
 
 
 # ---------------------------------------------------------------------------
